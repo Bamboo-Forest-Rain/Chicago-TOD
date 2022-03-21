@@ -1,0 +1,725 @@
+---
+title: "TOD Evaluation in Chicago"
+knit: (function(input_file, encoding) {
+  out_dir <- 'Assignment 1.Rmd';
+  rmarkdown::render(input_file,
+ encoding=encoding,
+ output_file=file.path(dirname(input_file), out_dir, 'index.html'))})
+subtitle: Yihong Hu 9/23/2021
+output:
+  html_document:
+    toc: true
+    toc_float:
+      collapsed: true
+      smooth_scroll: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,warning=FALSE,results = FALSE,message = FALSE)
+```
+
+# Introduction
+
+Transit Oriented Development (TOD) has received much attention in the field of urban planning. Ideally, this planning model entails a more dense, walkable, sustainable city; nevertheless, some criticizes that the model will make housing prices spike, displacing residents in poor neighborhoods. This brief evaluates the effect and potential of TOD in Chicago, a large American city with a mature transit system. How had the demographics changed within potential TOD areas in ten years? What's the relationship between these areas, rent and poverty rate? Are people willing to pay more for houses and rents near these areas?
+
+This brief compares the data from 2009 and 2019. The year 2009 is chosen, because some data is only available starting from 2009. A period of ten years provides a long enough time frame to see changes. Since the most recent data has been updated in 2019, the data set also reflects a more accurate situation close to the year we are in now (2021).
+
+# Data Wrangling
+
+## Loading Functions and Formula
+
+```{r}
+library(tidyverse)
+library(tidycensus)
+library(sf)
+library(kableExtra)
+library(rmarkdown)
+library(ggplot2)
+
+options(scipen=999)
+options(tigris_class = "sf")
+
+mapTheme <- function(base_size = 12) {
+  theme(
+    text = element_text( color = "black"),
+    plot.title = element_text(size = 16,colour = "black"),
+    plot.subtitle=element_text(face="italic"),
+    plot.caption=element_text(hjust=0),
+    axis.ticks = element_blank(),
+    panel.background = element_blank(),axis.title = element_blank(),
+    axis.text = element_blank(),
+    axis.title.x = element_blank(),
+    axis.title.y = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.border = element_rect(colour = "black", fill=NA, size=2),
+    strip.text.x = element_text(size = 14))
+}
+
+plotTheme <- function(base_size = 12) {
+  theme(
+    text = element_text( color = "black"),
+    plot.title = element_text(size = 16,colour = "black"),
+    plot.subtitle = element_text(face="italic"),
+    plot.caption = element_text(hjust=0),
+    axis.ticks = element_blank(),
+    panel.background = element_blank(),
+    panel.grid.major = element_line("grey80", size = 0.1),
+    panel.grid.minor = element_blank(),
+    panel.border = element_rect(colour = "black", fill=NA, size=2),
+    strip.background = element_rect(fill = "grey80", color = "white"),
+    strip.text = element_text(size=12),
+    axis.title = element_text(size=12),
+    axis.text = element_text(size=10),
+    plot.background = element_blank(),
+    legend.background = element_blank(),
+    legend.title = element_text(colour = "black", face = "italic"),
+    legend.text = element_text(colour = "black", face = "italic"),
+    strip.text.x = element_text(size = 14)
+  )
+}
+
+qBr <- function(df, variable, rnd) {
+  if (missing(rnd)) {
+    as.character(quantile(round(df[[variable]],0),
+                          c(.01,.2,.4,.6,.8), na.rm=T))
+  } else if (rnd == FALSE | rnd == F) {
+    as.character(formatC(quantile(df[[variable]]), digits = 3),
+                 c(.01,.2,.4,.6,.8), na.rm=T)
+  }
+}
+
+qBr2 <- function(df, variable, rnd) {
+  if (missing(rnd)) {
+    as.character(quantile(round(df[[variable]],digits = 2),
+                          c(.01,.2,.4,.6,.8), na.rm=T))
+  } else if (rnd == FALSE | rnd == F) {
+    as.character(formatC(quantile(df[[variable]]), digits = 3),
+                 c(.01,.2,.4,.6,.8), na.rm=T)
+  }
+}
+
+q5 <- function(variable) {as.factor(ntile(variable, 5))}
+q7 <- function(variable) {as.factor(ntile(variable, 7))}
+q4 <- function(variable) {as.factor(ntile(variable, 4))}
+
+palette5 <- c("#f0f9e8","#bae4bc","#7bccc4","#43a2ca","#0868ac")
+palette6 <- c("#00FFCC","#00FF99","#00FF66","#00FF33","#003300")
+
+```
+
+## Activate API key
+
+```{r}
+census_api_key("94efffd19b56ad527e379faea1653ee74dc3de4a",overwrite = TRUE)
+```
+
+## Getting ACS Data of Chicago from 2009 and 2019
+
+The shapefile for Chicago, using "place" feature, is missing. The map for Cook County is used instead to display the L-train stops in Chicago.
+
+Chicago ACS Data 2009
+
+```{r Chicago 2009 5 Year ACS Data}
+Chicago_09 <-  
+  get_acs(geography = "tract", output = "wide", variables = c(Total_Pop = "B25026_001E",White_Pop = "B02001_002E",Female_Bach = "B15001_050E", Male_Bach = "B15001_009E",MedHHInc = "B19013_001E",Med_Rent = "B25058_001E", Poverty_Pop = "B06012_002E"), 
+                year=2009, state=17, county = 31, geometry=T) %>% 
+  st_transform('EPSG:26916')
+
+Chicago_09 <- Chicago_09 %>%
+  dplyr::select(-NAME,-ends_with("M"),-geometry)%>%
+  mutate(pctWhite = ifelse(Total_Pop > 0, White_Pop / Total_Pop, 0),
+  pctBachelors = ifelse(Total_Pop > 0, ((Female_Bach + Male_Bach) / Total_Pop), 0),
+         pctPoverty = ifelse(Total_Pop > 0, Poverty_Pop / Total_Pop, 0),
+         year = "2009") %>%
+  dplyr::select(-White_Pop,-Female_Bach,-Male_Bach,-Poverty_Pop)
+```
+
+## Chicago ACS Data 2019
+
+```{r Chicago 2019 5 Year ACS Data}
+Chicago_19 <-  
+  get_acs(geography = "tract", output = "wide", variables = c(Total_Pop = "B25026_001E",White_Pop = "B02001_002E",Female_Bach = "B15001_050E", Male_Bach = "B15001_009E",MedHHInc = "B19013_001E",Med_Rent = "B25058_001E", Poverty_Pop = "B06012_002E"), 
+                year=2019, state=17, county=31, geometry=T) %>% 
+  st_transform('EPSG:26916')
+
+Chicago_19 <- Chicago_19 %>%
+  dplyr::select(-NAME,-ends_with("M"),-geometry)%>%
+  mutate(pctWhite = ifelse(Total_Pop > 0, White_Pop / Total_Pop, 0),
+  pctBachelors = ifelse(Total_Pop > 0, ((Female_Bach + Male_Bach) / Total_Pop), 0),
+         pctPoverty = ifelse(Total_Pop > 0, Poverty_Pop / Total_Pop, 0),
+         year = "2019") %>%
+  dplyr::select(-White_Pop,-Female_Bach,-Male_Bach,-Poverty_Pop)
+```
+
+## Combining 2009 and 2019 Data
+
+```{r Combine Data}
+
+Chicago_09and19 <- rbind(Chicago_09,Chicago_19)
+```
+
+## Getting Transit Open Data
+
+Chicago transit data can be found on Chicago Transit Authority website. We download the point-level data for L train stops in this case.
+
+```{r}
+Chicago_L_Stops <-
+  st_read("https://data.cityofchicago.org/download/4qtv-9w43/application%2Fxml") %>%
+  mutate(Stops = "Stops") %>%
+  st_transform('EPSG:26916') 
+
+#Change the coordinator system to show locations in coordinates instead of latitude and longitude. This set-up will be easier for future use. The lenth  unit is meter.
+```
+
+## Visualize L Train Stops in Chicago
+
+Figure 1 below shows the location of the L train stops at a point-level.
+
+```{r}
+ggplot() + 
+  geom_sf(data=st_union(Chicago_09)) +
+  geom_sf(data = Chicago_L_Stops, 
+          aes(colour=Stops), 
+          show.legend = "point", size= 2) +
+  scale_colour_manual(values = ("blue")) +
+  labs(title="L Train Stops", 
+       subtitle="Cook County, IL", 
+       caption="Figure 1") +
+  mapTheme()
+```
+
+## Setting-up Buffers for L Stops
+
+Graph below shows the buffer zone 1/2 miles in radius around L train stops.
+
+```{r}
+LBuffers <- 
+  rbind(
+    st_buffer(Chicago_L_Stops, 800) %>%
+      mutate(Legend = "Buffer") %>%
+      dplyr::select(Legend),
+    st_union(st_buffer(Chicago_L_Stops, 800)) %>%
+      st_sf() %>%
+      mutate(Legend = "Unioned Buffer")) %>%
+    st_transform('EPSG:26916')
+
+ggplot() +
+  geom_sf(data=LBuffers) +
+  geom_sf(data=Chicago_L_Stops, show.legend = "point") +
+  facet_wrap(~Legend) + scale_color_manual(values="blue")
+  mapTheme()
+```
+
+## Selecting the intersectional space between buffer and Chicago
+
+```{r}
+buffer <- filter(LBuffers, Legend=="Unioned Buffer")
+
+Centroids <-
+  st_centroid(Chicago_19)[buffer,] %>%
+    st_drop_geometry() %>%
+    left_join(dplyr::select(Chicago_19, GEOID)) %>%
+    st_sf()
+```
+
+# Time/Space Analysis between 2009 - 2019 for TOD and non-TOD Areas
+
+We want to conduct this analysis in Chicago only, otherwise non-TOD areas will extend to suburbs. In the steps below, a Chicago map in selected out by census tracts.
+
+## Separating TOD and Non TOD data and Loading Variable Information
+
+```{r}
+
+Chicago_09and19.TODinfo <- 
+  rbind(
+    st_centroid(Chicago_09and19)[buffer,] %>%
+      st_drop_geometry() %>%
+      left_join(Chicago_09and19) %>%
+      st_sf() %>%
+      mutate(TOD = "TOD"),
+    st_centroid(Chicago_09and19)[buffer, op = st_disjoint] %>%
+      st_drop_geometry() %>%
+      left_join(Chicago_09and19) %>%
+      st_sf() %>%
+      mutate(TOD = "Non-TOD")) %>%
+  mutate(Med_Rent.inf = ifelse(year == "2009", Med_Rent * 1.22, Med_Rent))%>%
+  mutate(MedHHInc.inf = ifelse(year=="2009",MedHHInc * 1.22, MedHHInc))%>%
+  mutate(pctPoverty.inf = pctPoverty*100, pctPoverty)%>%
+  mutate(pctBachelors.inf = pctBachelors*100, pctBachelors)%>%
+  st_transform('EPSG:26916')
+```
+
+## Clip-out Chicago from Cook County
+
+```{r}
+Chicago_Census_Tract_B <- st_read("https://data.cityofchicago.org/api/geospatial/5jrd-6zik?method=export&format=GeoJSON")%>%
+  st_transform(st_crs(Chicago_09and19.TODinfo))
+
+Chicago_selected <- Chicago_09and19.TODinfo[Chicago_Census_Tract_B,]
+```
+
+## Time/Space Graph Grouped by TOD and Non TOD areas
+
+```{r}
+ ggplot(Chicago_selected)+
+    geom_sf(data = st_union(Chicago_Census_Tract_B))+
+    geom_sf(aes(fill = TOD)) +
+    labs(title = "Time/Space Groups") +
+    facet_wrap(~year)+
+    mapTheme() + 
+    theme(plot.title = element_text(size=22))
+```
+
+We could see that Chicago census tracts generally remained the same, with a little expansion in 2019.
+
+We can then plot Time/Space Analysis Plots across different variables.
+
+## Median Rent
+
+```{r}
+ggplot(Chicago_selected)+
+    geom_sf(data = st_union(Chicago_Census_Tract_B))+
+    geom_sf(aes(fill = q5(Med_Rent.inf))) +
+    geom_sf(data = buffer, fill = "transparent", color = "red")+
+    scale_fill_manual(values = palette5,
+                      labels = qBr(Chicago_selected, "Med_Rent.inf"),
+                      name = "Rent in Real Dollars\n(Quintile Breaks)") +
+    labs(title = "Median Rent 2009 & 2019", subtitle = "Chicago, IL", caption = "Figure 2 Source: U.S. Census Bureau ACS Survey and Chicago Transit Authority") +
+    facet_wrap(~year)+
+    mapTheme() + 
+    theme(plot.title = element_text(size=22))
+```
+
+## Median Household Income
+
+```{r}
+ggplot(Chicago_selected)+
+    geom_sf(data = st_union(Chicago_Census_Tract_B))+
+    geom_sf(aes(fill = q5(Med_Rent.inf))) +
+    geom_sf(data = buffer, fill = "transparent", color = "red")+
+    scale_fill_brewer(palette = "Greens",
+                      labels = qBr(Chicago_selected, "MedHHInc.inf"),
+                      name = "Household Income in Real Dollars\n(Quintile Breaks)") +
+    labs(title = "Median Household Income 2009 & 2019", subtitle = "Chicago, IL", caption = "Figure 3 Source: U.S. Census Bureau ACS Survey and Chicago Transit Authority") +
+    facet_wrap(~year)+
+    mapTheme() + 
+    theme(plot.title = element_text(size=22))
+```
+
+## Poverty Rate
+
+```{r}
+ggplot(Chicago_selected)+
+    geom_sf(data = st_union(Chicago_Census_Tract_B))+
+    geom_sf(aes(fill = q5(pctPoverty.inf))) +
+    geom_sf(data = buffer, fill = "transparent", color = "red")+
+    scale_fill_brewer(palette = "Purples",
+                      labels = qBr(Chicago_selected, "pctPoverty.inf"),
+                      name = "Poverty Rate (%)\n(Quintile Breaks)") +
+    labs(title = "Poverty Rate 2009 & 2019", subtitle = "Chicago, IL", caption = "Figure 4 Source: U.S. Census Bureau ACS Survey and Chicago Transit Authority") +
+    facet_wrap(~year)+
+    mapTheme() + 
+    theme(plot.title = element_text(size=22))
+```
+
+## Education Rate (Bachelor or above)
+
+```{r}
+ggplot(Chicago_selected)+
+    geom_sf(data = st_union(Chicago_Census_Tract_B))+
+    geom_sf(aes(fill = q5(pctBachelors.inf))) +
+    geom_sf(data = buffer, fill = "transparent", color = "black")+
+    scale_fill_brewer(palette = "Reds",
+                      labels = qBr2(Chicago_selected, "pctBachelors.inf",rnd=FALSE),
+                      name = "Percentage of People\nHaving Bechelor Degree (%)\n(Quintile Breaks)") +
+    labs(title = "Percentage of People Having Bechelor Degree", subtitle = "Cook County, IL", caption = "Figure 5 Source: U.S. Census Bureau ACS Survey and Chicago Transit Authority") +
+    facet_wrap(~year)+
+    mapTheme() + 
+    theme(plot.title = element_text(size=22))
+```
+
+
+Notice that we could see huge economic disparities in Chicago between its North and South side. Household income and land value are much higher in the North side, and have continued to rise in ten years. Poverty Rate was much severe in the South, and is still severe after ten years. It is important to study both sides in depth. This may skew our TOD analysis later: if we see an increase in income around TOD areas, does this increase only appear in one side of the region?
+
+## Summary Table Grouped by TOD and Non-TOD areas
+
+```{r}
+Chicago_selected.Summary <- 
+  st_drop_geometry(Chicago_selected) %>%
+    group_by(year, TOD) %>%
+    summarize(Total_Population = mean(Total_Pop,na.rm = T),
+              Median_Rent = mean(Med_Rent.inf, na.rm = T),
+              Median_HH_Income = mean(MedHHInc.inf, na.rm = T),
+              Percent_Bach = mean(pctBachelors.inf, na.rm = T),
+              Percent_Poverty = mean(pctPoverty.inf, na.rm = T))
+
+Chicago_selected.Summary %>%
+  unite(year.TOD, year, TOD, sep = ": ", remove = T) %>%
+  gather(Variable, Value, -year.TOD) %>%
+  mutate(Value = round(Value, 2)) %>%
+  spread(year.TOD, Value) %>%
+  kable() %>%
+    kable_styling() %>%
+    footnote(general_title = "\n",
+             general = "Table 1")
+```
+
+
+From the graphs and the table above, we could see that there is an increase in population in TOD areas between 2009 and 2019, indicating that more people are willing to move into TOD area with slightly an higher rent, while population in non-TOD areas remained similar. We could also observe a decrease in poverty rate, and a growth in both income and education level in the city in general between 2009 and 2019.
+
+## Plot Indicators grouped by TOD and Non-TOD areas
+
+```{r}
+Chicago_selected.Summary %>%
+  gather(Variable, Value, -year, -TOD) %>%
+  ggplot(aes(year, Value, fill = TOD)) +
+    geom_bar(stat = "identity", position = "dodge") +
+    facet_wrap(~Variable, scales = "free", ncol=5) +
+    scale_fill_manual(values = c("#bae4bc", "#0868ac")) +
+    labs(title = "Indicator Differences Across Time and Space", caption = ("Figure 6")) +
+    plotTheme() + theme(legend.position="bottom")
+```
+
+
+Notice the rent in TOD areas has increased faster than the rent in non-TOD areas within these ten years, indicating that transit accessibility might be a major factor affecting housing market. On the other hand, the population has increased in TOD areas but decreased in non-TOD area, again showing that people are willing to pay higher rent with better transit accessibility. Other variables have a relative proportional increase in tens. People live in TOD areas usually have higher income and received better education.
+
+# Population and Median Rent within 0.5 miles of L stops (Graduated Symbol Maps)
+
+The graduated symbol graphs could give a more direct view on population size and household median rent using circle size within TOD areas (1/2 miles radius around L stops). We will look at the population and rent in 2019.
+
+## Population
+
+```{r}
+library(RColorBrewer)
+new_Lstops <- Chicago_L_Stops
+new_Lstops <- st_join(Chicago_L_Stops, Chicago_selected, join = st_intersects) %>%
+  filter(year == "2019") %>%
+  na.omit()
+
+ggplot()+
+  geom_sf(data = Chicago_selected,fill= "white", color="grey75")+
+  geom_sf(data = new_Lstops %>%
+            st_centroid(),
+     shape = 21, color="transparent",
+     aes(size = Total_Pop, fill = Total_Pop))+
+  scale_size_continuous(
+     range = c(0,6),
+     breaks = c(0,2000,4000,6000,8000),
+     labels = c("0 to 1999", "2000 to 3999", "4000 to 5999", "6000 to 7999","8000+"),
+     name="Poplation In Areas that\n Are Within 0.5 Miles\n radius of L Stops 2019")+
+  scale_fill_stepsn(	
+     colors = RColorBrewer::brewer.pal(4, name="YlOrRd"),
+     breaks=c(0,2000,4000,6000,8000),
+     guide=FALSE)+
+  labs(title = "Population within TOD Areas", caption = "Figure 7 Source ACS Survey and Chicago Transit Authority", subtitle = "Chicago, IL") +
+  theme(axis.title=element_blank(),
+     axis.text=element_blank(), axis.ticks=element_blank(),
+     panel.background = element_rect(fill='gray'))+
+  guides(
+     size = guide_legend(override.aes = list(fill = brewer.pal(4,   name="YlOrRd"))))
+```
+
+## Median Household Rent
+
+```{r}
+ggplot()+
+  geom_sf(data = Chicago_selected,fill= "white", color="grey75")+
+  geom_sf(data = new_Lstops %>%
+            st_centroid(),
+     shape = 21, color="transparent",
+     aes(size = Med_Rent, fill = Med_Rent))+
+  scale_size_continuous(
+     range = c(1,6),
+     breaks = c(0,500,1000,1500,2000,2500),
+     labels = c("0 to 499", "500 to 999", "1000 to 1499", "1500 to 1999","2000 to 2499","2500+"),
+     name="Median Rent\n (in real dollars)")+
+  scale_fill_stepsn(	
+     colors = RColorBrewer::brewer.pal(4, name="YlGn"),
+     breaks=c(0,500,1000,1500,2000,2500),
+     guide=FALSE)+
+  labs(title = "Median Household Rent within TOD Areas", caption = "Figure 8 Source ACS Survey and Chicago Transit Authority", subtitle = "Chicago, IL") +
+  theme(axis.title=element_blank(),
+     axis.text=element_blank(), axis.ticks=element_blank(),
+     panel.background = element_rect(fill='gray'))+
+  guides(
+     size = guide_legend(override.aes = list(fill = brewer.pal(4,   name="YlGn")))) 
+```
+
+
+In summary, population is concentrated at the city center; it also has the highest rent. In addition, we can see a clear difference in the North and South side of Chicago. North Chicago has much higher number of residents and extensively higher rent.
+
+# Geomline Plot Camparing Rent against distance away from L Stops
+
+We will access weather the rent is higher when the unit is closer to a transit stop using Geomline Plot.
+
+## Setting up Multiple Ring Buffer Function
+
+```{r}
+  multipleRingBuffer <- function(inputPolygon, maxDistance, interval) 
+{
+  #create a list of distances that we'll iterate through to create each ring
+  distances <- seq(0, maxDistance, interval)
+  #we'll start with the second value in that list - the first is '0'
+  distancesCounter <- 2
+  #total number of rings we're going to create
+  numberOfRings <- floor(maxDistance / interval)
+  #a counter of number of rings
+  numberOfRingsCounter <- 1
+  #initialize an otuput data frame (that is not an sf)
+  allRings <- data.frame()
+  
+  #while number of rings  counteris less than the specified nubmer of rings
+  while (numberOfRingsCounter <= numberOfRings) 
+  {
+    #if we're interested in a negative buffer and this is the first buffer
+    #(ie. not distance = '0' in the distances list)
+    if(distances[distancesCounter] < 0 & distancesCounter == 2)
+    {
+      #buffer the input by the first distance
+      buffer1 <- st_buffer(inputPolygon, distances[distancesCounter])
+      #different that buffer from the input polygon to get the first ring
+      buffer1_ <- st_difference(inputPolygon, buffer1)
+      #cast this sf as a polygon geometry type
+      thisRing <- st_cast(buffer1_, "POLYGON")
+      #take the last column which is 'geometry'
+      thisRing <- as.data.frame(thisRing[,ncol(thisRing)])
+      #add a new field, 'distance' so we know how far the distance is for a give ring
+      thisRing$distance <- distances[distancesCounter]
+    }
+    
+    
+    #otherwise, if this is the second or more ring (and a negative buffer)
+    else if(distances[distancesCounter] < 0 & distancesCounter > 2) 
+    {
+      #buffer by a specific distance
+      buffer1 <- st_buffer(inputPolygon, distances[distancesCounter])
+      #create the next smallest buffer
+      buffer2 <- st_buffer(inputPolygon, distances[distancesCounter-1])
+      #This can then be used to difference out a buffer running from 660 to 1320
+      #This works because differencing 1320ft by 660ft = a buffer between 660 & 1320.
+      #bc the area after 660ft in buffer2 = NA.
+      thisRing <- st_difference(buffer2,buffer1)
+      #cast as apolygon
+      thisRing <- st_cast(thisRing, "POLYGON")
+      #get the last field
+      thisRing <- as.data.frame(thisRing$geometry)
+      #create the distance field
+      thisRing$distance <- distances[distancesCounter]
+    }
+    
+    #Otherwise, if its a positive buffer
+    else 
+    {
+      #Create a positive buffer
+      buffer1 <- st_buffer(inputPolygon, distances[distancesCounter])
+      #create a positive buffer that is one distance smaller. So if its the first buffer
+      #distance, buffer1_ will = 0. 
+      buffer1_ <- st_buffer(inputPolygon, distances[distancesCounter-1])
+      #difference the two buffers
+      thisRing <- st_difference(buffer1,buffer1_)
+      #cast as a polygon
+      thisRing <- st_cast(thisRing, "POLYGON")
+      #geometry column as a data frame
+      thisRing <- as.data.frame(thisRing[,ncol(thisRing)])
+      #add teh distance
+      thisRing$distance <- distances[distancesCounter]
+    }  
+    
+    #rbind this ring to the rest of the rings
+    allRings <- rbind(allRings, thisRing)
+    #iterate the distance counter
+    distancesCounter <- distancesCounter + 1
+    #iterate the number of rings counter
+    numberOfRingsCounter <- numberOfRingsCounter + 1
+  }
+  
+  #convert the allRings data frame to an sf data frame
+  allRings <- st_as_sf(allRings)
+}
+```
+
+## Creating Multiple Ring Buffer around L stops
+
+```{r}
+Chicago_selected %>%
+  st_transform('EPSG:26916')
+
+Chicago_all.rings <-
+  st_join(st_centroid(dplyr::select(Chicago_selected, GEOID, year)), 
+          multipleRingBuffer(buffer, 11265, 804)) %>%
+  st_drop_geometry() %>%
+  left_join(dplyr::select(Chicago_selected, GEOID, Med_Rent, year), 
+            by=c("GEOID"="GEOID", "year"="year")) %>%
+  st_sf() %>%
+    na.omit()%>%
+    mutate(distance = distance / 1609.34)
+
+```
+
+## Plotting Geomline
+
+```{r}
+Ring.Sum <- Chicago_all.rings %>%
+  st_drop_geometry()%>%
+  group_by(year,distance)%>%
+  summarize(Mean_Med_rent = mean (Med_Rent,na.rm=T))
+
+
+ggplot(data=Ring.Sum, aes(x=distance, y=Mean_Med_rent, color=year)) +
+  geom_line(size=1.5)+
+  geom_point(size=2)+
+  labs(title="Median Household Rent ($) Against Distance Away from the L Stops", caption = ("Figure 9"))+
+  xlab("Miles")+
+  ylab("Mean Median Household Rent by Census Tracts")
+```
+
+
+The data in 2009 seems to be less dramatic first few miles away from the stops; the data in 2019 is more fluctuating. Interestingly, in 2009, the highest rent occurs 3 miles away from the L stops; in 2019, it occurs at a distance very close to the stops. This observation could mean that TOD has played a role in rising rent prices in Chicago. 
+
+Another interesting observation is at 7 miles away from the stops, 2009 and 2019 data sets show opposite results in rents. Perhaps, multiple major development projects took place somewhere 7 miles away from the stops in ten years.
+
+# Crime Data of Chicago in 2009 and 2019
+
+The offense type chosen is pocket-picking. Since people live in TOD areas generally have higher income and pay higher, would this fact provide a ground for more theft-related crimes to be committed?
+
+## Getting Crime Data
+
+```{r}
+library(crimedata)
+library(lubridate)
+
+Chicago_Crime_2009 <- get_crime_data(cities = "Chicago", 
+                         years = 2009,
+                         type = "core",
+                         output = "sf") %>%
+  filter(offense_type=="pocket-picking")
+
+Chicago_Crime_2019 <- get_crime_data(cities = "Chicago", 
+                         years = 2019,
+                         type = "core",
+                         output = "sf") %>%
+  filter(offense_type=="pocket-picking")
+
+crime_both_year <- rbind(Chicago_Crime_2009,Chicago_Crime_2019) %>%
+  st_transform(st_crs(Chicago_selected)) 
+
+```
+
+## Count Crime in Census Tracts
+
+```{r}
+Crime_in_Census_Tract <-st_join(crime_both_year,Chicago_selected)
+
+Crime_Count <- count(as_tibble(Crime_in_Census_Tract),GEOID)
+
+Re_Join_Crime_withSF <- left_join(Crime_in_Census_Tract,Crime_Count,by = "GEOID")%>%
+  rename("Crime_Count" = n)%>%
+  select(-uid, -city_name, -offense_code, -longitude, -latitude,-census_block, -offense_type, -offense_group, -offense_against, -date_single,-location_type, -location_category) 
+
+Re_Join_Crime_withSF2 <- na.omit(Re_Join_Crime_withSF) %>%
+  st_drop_geometry()%>%
+  left_join(Chicago_selected, Re_Join_Crime_withSF, by = "GEOID")%>%
+  st_sf()
+```
+
+## Crime Count in TOD Census Tract
+
+```{r}
+ggplot(Re_Join_Crime_withSF2)+
+    geom_sf(data = st_union(Chicago_Census_Tract_B))+
+    geom_sf(aes(fill = q5(Crime_Count))) +
+    geom_sf(data = buffer, fill = "transparent", color = "red")+
+    scale_fill_brewer(palette = "BuPu",
+                      labels = qBr(Re_Join_Crime_withSF,"Crime_Count"),
+                      name = "Crime Count") +
+    labs(title = "Crime Count Pocket-Picking 2009 and 2019", subtitle = "Chicago, IL", caption = "Figure 10") +
+    facet_wrap(~year.x)+
+    mapTheme() + 
+    theme(plot.title = element_text(size=22))
+```
+
+
+Most cases are concentrated at the city center, and the rest sparsely spreads evenly throughout the city.
+
+## Crime and Other TOD Indicators Summary Table
+
+```{r}
+Chicago_Crime.Summary <- 
+  Re_Join_Crime_withSF %>%
+  na.omit() %>%
+   st_drop_geometry() %>%
+    group_by(year, TOD) %>%
+    summarize(Total_Population = mean(Total_Pop,na.rm = T),
+              Median_Rent = mean(Med_Rent.inf, na.rm = T),
+              Median_HH_Income = mean(MedHHInc.inf, na.rm = T),
+              Percent_Bach = mean(pctBachelors.inf, na.rm = T),
+              Percent_Poverty = mean(pctPoverty.inf, na.rm = T),
+              Crime_Pocket_Picking_Count=mean(Crime_Count, na.rm =T))
+
+Chicago_Crime.Summary %>%
+  unite(year.TOD, year, TOD, sep = ": ", remove = T) %>%
+  gather(Variable, Value, -year.TOD) %>%
+  mutate(Value = round(Value, 0)) %>%
+  spread(year.TOD, Value) %>%
+  kable() %>%
+    kable_styling() %>%
+    footnote(general_title = "\n",
+             general = "Table 2 TOD Indicators with Various Variables, including crime number")
+```
+
+## Geomline Plot Camparing Crime against Distance Away From L stops
+
+```{r}
+Chicago_selected <- Chicago_selected %>%
+  st_transform('EPSG:26916')
+
+Chicago_all.rings.crime <-
+  st_join(st_centroid(dplyr::select(Chicago_selected, GEOID, year)), 
+          multipleRingBuffer(buffer, 11265, 804)) %>%
+  st_drop_geometry() %>%
+  left_join(dplyr::select(Re_Join_Crime_withSF, GEOID, Crime_Count, year),
+            by=c("GEOID"="GEOID", "year"="year")) %>%
+  st_sf() %>%
+    na.omit()%>%
+    mutate(distance = distance / 1609.34)
+
+Ring.Sum2 <- Chicago_all.rings.crime %>%
+  st_drop_geometry()%>%
+  group_by(year,distance)%>%
+  summarize(Crime = mean (Crime_Count,na.rm=T))
+
+
+ggplot(data=Ring.Sum2, aes(x=distance, y=Crime, color=year)) +
+  geom_line(size=1.5)+
+  geom_point(size=2)+
+  labs(title="Pocket-Picking Crime Count Against Distance Away from the L Stops",caption = ("Figure 11"))+
+  xlab("Miles")+
+  ylab("Crime Count Pocket-Picking by Census Tracts")
+```
+
+
+Table 1 and Figure 11 show the relationship across different indicators. It seems like more pocket-picking offenses would be committed in TOD areas than non-TOD areas and in higher rent areas than lower rent areas. However, as we see in Figure 10, most crimes are concentrated at the city center, where most transit stops exist. It is hard to tell if access to transit would be the determining factor of increased count of crimes. Perhaps, the nature of crime also matters. For example, more people might commit pick-pocketing at a denser area, because they can easily "dissolve" into the population; property damage, on the other hand, might be committed frequently in area with less residents.
+
+Table 2 is different from Table 1, becuse some "NA" data was omitted. The general trend remains the same.
+
+## Comparing Changes within Indicators between 2009 and 2019
+
+```{r}
+Chicago_Crime.Summary %>%
+  gather(Variable, Value, -year, -TOD) %>%
+  ggplot(aes(year, Value, fill = TOD)) +
+    geom_bar(stat = "identity", position = "dodge") +
+    facet_wrap(~Variable, scales = "free", ncol=5) +
+    scale_fill_manual(values = c("#bae4bc", "#0868ac")) +
+    labs(title = "Indicator Differences Across Time and Space") +
+    plotTheme() + theme(legend.position="bottom")
+```
+
+
+We can see from above, as rent increases, the crime also increases.
+
+## Conclusion: Is Chicago Good for TOD?
+
+Overall, this brief shows Chicago as a good candidate for TOD. People are willing to pay more rent to have easier access to transits. This trend can be shown through the fast increase in population around TOD area between 2009-2019, even though the rent is higher, while population in non-TOD area remains similar. TOD is also associated with reduced poverty, higher education level, higher income level. However, these patterns can be seen in non-TOD areas as well, therefore these variables might be less correlated with access to transit than the development of city as a whole. This analysis does not provide an adequate crime data to determine the relationship between crime and TOD. More crime types need to be assessed and the neighborhood effects need to be considered as well.
+
+We also have to pay attention to the inequity in Chicago. The land value seems to be much lower in the South side than the North side throughout these 10 years, regardless of the access to transit. An in-depth study between these sides are necessary. TOD holds equity development as a core value; it won't be effective when it only benefits one group of people. In addition, we could see that transit extends to North and West much more than to the South, meaning there are people living in South Chicago who have no access to transits at all.
